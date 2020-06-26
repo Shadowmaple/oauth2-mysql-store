@@ -4,68 +4,135 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/jinzhu/gorm"
 	"gopkg.in/oauth2.v4"
+	"gopkg.in/oauth2.v4/models"
 )
 
 type TokenStore struct {
-	db    *gorm.DB
-	table string
+	db         *gorm.DB
+	tableName  string
+	gcDisabled bool
+	gcInterval time.Duration
+	ticker     *time.Ticker
 }
 
 type Config struct {
-	Addr     string
-	User     string
-	Password string
-	Database string
-	Table    string
+	Addr       string
+	UserName   string
+	Password   string
+	Database   string
+	Table      string
+	GcDisabled bool
+	GcInterval time.Duration
 }
 
 type TokenModel struct {
-	gorm.Model
-	ExpiredAt int64  `gorm:"column:expired_at"`
-	Code      string `gorm:"column:code type:varchar(255)"`
-	Access    string `gorm:"column:access type:varchar(255)"`
-	Refresh   string `gorm:"column:refresh type:varchar(255)"`
-	Data      string `gorm:"column:data type:text"`
+	// gorm.Model
+	ID        uint      `gorm:"primary_key; AUTO_INCREMENT"`
+	CreatedAt time.Time `gorm:"column:created_at"`
+	ExpiredAt int64     `gorm:"column:expired_at"`
+	Code      string    `gorm:"column:code; type:varchar(255); default:''"`
+	Access    string    `gorm:"column:access; type:varchar(255); default:''"`
+	Refresh   string    `gorm:"column:refresh; type:varchar(255); default:''"`
+	Data      string    `gorm:"column:data; type:text"`
 }
 
 func DefaultConfig() *Config {
 	return &Config{
-		Addr:     "localhost:6844",
-		User:     "root",
+		Addr:     "localhost:3306",
+		UserName: "root",
 		Password: "root",
-		Database: "oauth",
-		Table:    "",
+		Database: "oauth2",
 	}
 }
 
-func NewDefaultTokenStore() oauth2.TokenStore {
+func NewDefaultTokenStore() *TokenStore {
 	return NewTokenStore(DefaultConfig())
 }
 
-func NewTokenStore(cf *Config) oauth2.TokenStore {
-	uri := fmt.Sprintf("%s:%s@%s&%s", cf.User, cf.Password, cf.Addr, cf.Database)
-	db, err := gorm.Open(uri)
+func NewTokenStore(cf *Config) *TokenStore {
+	uri := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8&parseTime=True&loc=Local",
+		cf.UserName, cf.Password, cf.Addr, cf.Database)
+
+	db, err := gorm.Open("mysql", uri)
 	if err != nil {
 		panic(err)
 	}
+
 	store := &TokenStore{
-		db:    db,
-		table: cf.Table,
+		db:         db,
+		tableName:  cf.Table,
+		gcDisabled: cf.GcDisabled,
+		gcInterval: cf.GcInterval,
 	}
 	if cf.Table == "" {
-		store.table = "oauth_token"
+		store.tableName = "oauth2_token"
 	}
 
-	if !db.HasTable(store.table) {
-		err := db.Table(store.table).CreateTable(&TokenModel{}).Error
+	// Create table if not exists.
+	if !db.HasTable(store.tableName) {
+		err := db.Table(store.tableName).CreateTable(&TokenModel{}).Error
 		if err != nil {
 			panic(err)
 		}
 	}
+
+	if !store.gcDisabled {
+		if cf.GcInterval <= 0 {
+			store.gcInterval = time.Minute * 30
+		}
+		store.ticker = time.NewTicker(store.gcInterval)
+
+		go store.gc()
+	}
+
 	return store
+}
+
+func (t *TokenStore) Close() {
+	if !t.gcDisabled {
+		t.ticker.Stop()
+	}
+	t.db.Close()
+}
+
+func (t *TokenStore) gc() {
+	for range t.ticker.C {
+		t.clean()
+	}
+}
+
+func (t *TokenStore) clean() {
+	now := time.Now().Unix()
+	var count int32
+	var err error
+
+	err = t.db.Table(t.tableName).
+		Where("expired_at <= ?", now).
+		Or("code = '' AND access = '' AND refresh = ''").Count(&count).Error
+
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if count == 0 {
+		return
+	}
+
+	err = t.db.Table(t.tableName).
+		Where("expired_at <= ?", now).
+		Or("code = '' AND access = '' AND refresh = ''").Delete(&TokenModel{}).Error
+
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	log.Printf("------- gc OK ---------- %d\n", count)
 }
 
 // create and store the new token information
@@ -91,30 +158,22 @@ func (t *TokenStore) Create(ctx context.Context, info oauth2.TokenInfo) error {
 		}
 	}
 
-	return t.db.Table(t.table).Create(item).Error
+	return t.db.Table(t.tableName).Create(item).Error
 }
 
 // delete the authorization code
 func (t *TokenStore) RemoveByCode(ctx context.Context, code string) error {
-	return t.db.Table(t.table).Where("code = ?", code).Update("code", "").Error
+	return t.db.Table(t.tableName).Where("code = ?", code).Update("code", "").Error
 }
 
 // use the access token to delete the token information
 func (t *TokenStore) RemoveByAccess(ctx context.Context, access string) error {
-	return t.db.Table(t.table).Where("access = ?", access).Update("access", "").Error
+	return t.db.Table(t.tableName).Where("access = ?", access).Update("access", "").Error
 }
 
 // use the refresh token to delete the token information
 func (t *TokenStore) RemoveByRefresh(ctx context.Context, refresh string) error {
-	return t.db.Table(t.table).Where("refresh = ?", refresh).Update("refresh", "").Error
-}
-
-func (t *TokenStore) parseTokenData(data string) (oauth2.TokenInfo, error) {
-	var info oauth2.TokenInfo
-	if err := json.Unmarshal([]byte(data), &info); err != nil {
-		return nil, err
-	}
-	return info, nil
+	return t.db.Table(t.tableName).Where("refresh = ?", refresh).Update("refresh", "").Error
 }
 
 // use the authorization code for token information data
@@ -124,7 +183,7 @@ func (t *TokenStore) GetByCode(ctx context.Context, code string) (oauth2.TokenIn
 	}
 
 	var item TokenModel
-	err := t.db.Table(t.table).Where("code = ?", code).First(&item).Error
+	err := t.db.Table(t.tableName).Where("code = ?", code).First(&item).Error
 	if gorm.IsRecordNotFoundError(err) {
 		return nil, nil
 	}
@@ -139,7 +198,7 @@ func (t *TokenStore) GetByAccess(ctx context.Context, access string) (oauth2.Tok
 	}
 
 	var item TokenModel
-	err := t.db.Table(t.table).Where("access = ?", access).First(&item).Error
+	err := t.db.Table(t.tableName).Where("access = ?", access).First(&item).Error
 	if gorm.IsRecordNotFoundError(err) {
 		return nil, nil
 	}
@@ -153,10 +212,19 @@ func (t *TokenStore) GetByRefresh(ctx context.Context, refresh string) (oauth2.T
 	}
 
 	var item TokenModel
-	err := t.db.Table(t.table).Where("refresh = ?", refresh).First(&item).Error
+	err := t.db.Table(t.tableName).Where("refresh = ?", refresh).First(&item).Error
 	if gorm.IsRecordNotFoundError(err) {
 		return nil, nil
 	}
 
 	return t.parseTokenData(item.Data)
+}
+
+// parseTokenData parse token data from json string to oauth2.TokenInfo.
+func (t *TokenStore) parseTokenData(data string) (oauth2.TokenInfo, error) {
+	var info models.Token
+	if err := json.Unmarshal([]byte(data), &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
 }
