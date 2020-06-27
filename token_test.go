@@ -12,9 +12,11 @@ import (
 
 func TestTokenStore(t *testing.T) {
 	Convey("Test token store", t, func() {
-		config := DefaultConfig()
+		config := DefaultTokenConfig()
 		config.GcInterval = time.Second
 		store := NewTokenStore(config)
+
+		defer store.Close()
 
 		// wait for gc
 		defer time.Sleep(time.Second * 5)

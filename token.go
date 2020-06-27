@@ -21,19 +21,8 @@ type TokenStore struct {
 	ticker     *time.Ticker
 }
 
-type Config struct {
-	Addr       string
-	UserName   string
-	Password   string
-	Database   string
-	Table      string
-	GcDisabled bool
-	GcInterval time.Duration
-}
-
 type TokenModel struct {
-	// gorm.Model
-	ID        uint      `gorm:"primary_key; AUTO_INCREMENT"`
+	ID        uint64    `gorm:"primary_key; AUTO_INCREMENT"`
 	CreatedAt time.Time `gorm:"column:created_at"`
 	ExpiredAt int64     `gorm:"column:expired_at"`
 	Code      string    `gorm:"column:code; type:varchar(255); default:''"`
@@ -42,22 +31,13 @@ type TokenModel struct {
 	Data      string    `gorm:"column:data; type:text"`
 }
 
-func DefaultConfig() *Config {
-	return &Config{
-		Addr:     "localhost:3306",
-		UserName: "root",
-		Password: "root",
-		Database: "oauth2",
-	}
-}
-
 func NewDefaultTokenStore() *TokenStore {
-	return NewTokenStore(DefaultConfig())
+	return NewTokenStore(DefaultTokenConfig())
 }
 
-func NewTokenStore(cf *Config) *TokenStore {
+func NewTokenStore(cfg *TokenConfig) *TokenStore {
 	uri := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8&parseTime=True&loc=Local",
-		cf.UserName, cf.Password, cf.Addr, cf.Database)
+		cfg.UserName, cfg.Password, cfg.Addr, cfg.Database)
 
 	db, err := gorm.Open("mysql", uri)
 	if err != nil {
@@ -66,11 +46,11 @@ func NewTokenStore(cf *Config) *TokenStore {
 
 	store := &TokenStore{
 		db:         db,
-		tableName:  cf.Table,
-		gcDisabled: cf.GcDisabled,
-		gcInterval: cf.GcInterval,
+		tableName:  cfg.Table,
+		gcDisabled: cfg.GcDisabled,
+		gcInterval: cfg.GcInterval,
 	}
-	if cf.Table == "" {
+	if cfg.Table == "" {
 		store.tableName = "oauth2_token"
 	}
 
@@ -83,7 +63,7 @@ func NewTokenStore(cf *Config) *TokenStore {
 	}
 
 	if !store.gcDisabled {
-		if cf.GcInterval <= 0 {
+		if cfg.GcInterval <= 0 {
 			store.gcInterval = time.Minute * 30
 		}
 		store.ticker = time.NewTicker(store.gcInterval)
@@ -130,19 +110,17 @@ func (t *TokenStore) clean() {
 
 	if err != nil {
 		log.Println(err)
-		return
 	}
-	log.Printf("------- gc OK ---------- %d\n", count)
 }
 
 // create and store the new token information
 func (t *TokenStore) Create(ctx context.Context, info oauth2.TokenInfo) error {
-	jv, err := json.Marshal(info)
+	data, err := json.Marshal(info)
 	if err != nil {
 		return err
 	}
 	item := &TokenModel{
-		Data: string(jv),
+		Data: string(data),
 	}
 
 	if code := info.GetCode(); code != "" {
@@ -182,10 +160,13 @@ func (t *TokenStore) GetByCode(ctx context.Context, code string) (oauth2.TokenIn
 		return nil, nil
 	}
 
-	var item TokenModel
-	err := t.db.Table(t.tableName).Where("code = ?", code).First(&item).Error
-	if gorm.IsRecordNotFoundError(err) {
-		return nil, nil
+	var item struct{ Data string }
+	err := t.db.Table(t.tableName).Select("data").Where("code = ?", code).Scan(&item).Error
+	if err != nil {
+		if gorm.IsRecordNotFoundError(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 
 	return t.parseTokenData(item.Data)
@@ -197,11 +178,15 @@ func (t *TokenStore) GetByAccess(ctx context.Context, access string) (oauth2.Tok
 		return nil, nil
 	}
 
-	var item TokenModel
-	err := t.db.Table(t.tableName).Where("access = ?", access).First(&item).Error
-	if gorm.IsRecordNotFoundError(err) {
-		return nil, nil
+	var item struct{ Data string }
+	err := t.db.Table(t.tableName).Select("data").Where("access = ?", access).Scan(&item).Error
+	if err != nil {
+		if gorm.IsRecordNotFoundError(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
+
 	return t.parseTokenData(item.Data)
 }
 
@@ -211,10 +196,13 @@ func (t *TokenStore) GetByRefresh(ctx context.Context, refresh string) (oauth2.T
 		return nil, nil
 	}
 
-	var item TokenModel
-	err := t.db.Table(t.tableName).Where("refresh = ?", refresh).First(&item).Error
-	if gorm.IsRecordNotFoundError(err) {
-		return nil, nil
+	var item struct{ Data string }
+	err := t.db.Table(t.tableName).Select("data").Where("refresh = ?", refresh).Scan(&item).Error
+	if err != nil {
+		if gorm.IsRecordNotFoundError(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 
 	return t.parseTokenData(item.Data)

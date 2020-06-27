@@ -1,4 +1,4 @@
-package clientStore
+package store
 
 import (
 	"context"
@@ -18,33 +18,19 @@ type ClientStore struct {
 	tableName string
 }
 
-type Config struct {
-	Addr     string
-	UserName string
-	Password string
-	Database string
-	Table    string
-}
-
 type ClientModel struct {
-	ID           uint32    `gorm:"primary_key; AUTO_INCREMENT"`
-	CreatedAt    time.Time `gorm:"column:created_at"`
-	ClientID     string    `gorm:"column:client_id; type:varchar(255); unique_index"`
-	ClientSecret string    `gorm:"column:client_secret; type:varchar(255)"`
-	Domain       string    `gorm:"column:domain; type:varchar(50); index"`
-	Data         string    `gorm:"column:data; type:text"`
+	ID        string    `gorm:"column:id; primary_key; type:varchar(255)"`
+	Secret    string    `gorm:"column:client_secret; type:varchar(255)"`
+	Domain    string    `gorm:"column:domain; type:varchar(50); index"`
+	Data      string    `gorm:"column:data; type:text"`
+	CreatedAt time.Time `gorm:"column:created_at"`
 }
 
-func DefaultConfig() *Config {
-	return &Config{
-		Addr:     "localhost:3306",
-		UserName: "root",
-		Password: "root",
-		Database: "oauth2",
-	}
+func NewDefaultClientStore() *ClientStore {
+	return NewClientStore(DefaultClientConfig())
 }
 
-func NewClientStore(cfg *Config) *ClientStore {
+func NewClientStore(cfg *ClientConfig) *ClientStore {
 	uri := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8&parseTime=True&loc=Local",
 		cfg.UserName, cfg.Password, cfg.Addr, cfg.Database)
 
@@ -83,8 +69,11 @@ func (c *ClientStore) GetByID(ctx context.Context, id string) (oauth2.ClientInfo
 	}
 
 	var item struct{ Data string }
-	err := c.db.Table(c.tableName).Select("data").Where("client_id = ?", id).Scan(&item).Error
+	err := c.db.Table(c.tableName).Select("data").Where("id = ?", id).Scan(&item).Error
 	if err != nil {
+		if gorm.IsRecordNotFoundError(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 
@@ -109,16 +98,20 @@ func (c *ClientStore) Create(info oauth2.ClientInfo) error {
 		return errors.New("clientID, secret and domain are required.")
 	}
 
+	if ok := c.checkExistence(clientID); ok {
+		return errors.New("The client has already existed.")
+	}
+
 	data, err := json.Marshal(info)
 	if err != nil {
 		return err
 	}
 
 	client := &ClientModel{
-		ClientID:     clientID,
-		ClientSecret: Secret,
-		Domain:       domain,
-		Data:         string(data),
+		ID:     clientID,
+		Secret: Secret,
+		Domain: domain,
+		Data:   string(data),
 	}
 
 	return c.db.Table(c.tableName).Create(client).Error
@@ -133,12 +126,19 @@ func (c *ClientStore) GetByDomain(domain string) (oauth2.ClientInfo, error) {
 	var item struct{ Data string }
 	err := c.db.Table(c.tableName).Select("data").Where("domain = ?", domain).Scan(&item).Error
 	if err != nil {
+		if gorm.IsRecordNotFoundError(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 
 	return c.parseClientData(item.Data)
 }
 
-func parseDomain() {
-
+func (c *ClientStore) checkExistence(id string) bool {
+	var count uint32
+	c.db.Table(c.tableName).Where("id = ?", id).Count(&count)
+	return count != 0
 }
+
+func parseDomain() {}

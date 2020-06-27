@@ -1,4 +1,4 @@
-package clientStore
+package store
 
 import (
 	"context"
@@ -10,13 +10,12 @@ import (
 
 func TestClientStore(t *testing.T) {
 	Convey("Test client store:", t, func() {
-		store := NewClientStore(DefaultConfig())
+		store := NewClientStore(DefaultClientConfig())
 		defer store.Close()
 
-		// Convey("Test Get", func() {
 		ctx := context.Background()
 		info := &models.Client{
-			ID:     "22222",
+			ID:     "12_4",
 			Secret: "231udna_dfe",
 			Domain: "www.example.com",
 		}
@@ -30,6 +29,5 @@ func TestClientStore(t *testing.T) {
 		clientInfo, err = store.GetByDomain(info.Domain)
 		So(err, ShouldBeNil)
 		So(clientInfo.GetSecret(), ShouldEqual, info.Secret)
-		// })
 	})
 }
