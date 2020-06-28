@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -110,7 +111,7 @@ func (c *ClientStore) Create(info oauth2.ClientInfo) error {
 	client := &ClientModel{
 		ID:     clientID,
 		Secret: Secret,
-		Domain: domain,
+		Domain: c.parseDomain(domain),
 		Data:   string(data),
 	}
 
@@ -141,4 +142,10 @@ func (c *ClientStore) checkExistence(id string) bool {
 	return count != 0
 }
 
-func parseDomain() {}
+func (c *ClientStore) parseDomain(url string) string {
+	a := strings.Split(url, "//")
+	if len(a) == 1 {
+		return strings.Split(a[0], "/")[0]
+	}
+	return strings.Split(a[1], "/")[0]
+}
