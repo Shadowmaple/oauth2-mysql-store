@@ -31,10 +31,12 @@ type TokenModel struct {
 	Data      string    `gorm:"column:data; type:text"`
 }
 
+// NewDefaultTokenStore return a default token storage according to default config.
 func NewDefaultTokenStore() *TokenStore {
 	return NewTokenStore(DefaultTokenConfig())
 }
 
+// NewTokenStore return a new token storage.
 func NewTokenStore(cfg *TokenConfig) *TokenStore {
 	uri := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8&parseTime=True&loc=Local",
 		cfg.UserName, cfg.Password, cfg.Addr, cfg.Database)
@@ -81,6 +83,7 @@ func (t *TokenStore) Close() {
 	t.db.Close()
 }
 
+// gc removes expired and useless records regularly.
 func (t *TokenStore) gc() {
 	for range t.ticker.C {
 		t.clean()
@@ -113,7 +116,7 @@ func (t *TokenStore) clean() {
 	}
 }
 
-// create and store the new token information
+// Create creates and store the new token information.
 func (t *TokenStore) Create(ctx context.Context, info oauth2.TokenInfo) error {
 	data, err := json.Marshal(info)
 	if err != nil {
@@ -139,22 +142,25 @@ func (t *TokenStore) Create(ctx context.Context, info oauth2.TokenInfo) error {
 	return t.db.Table(t.tableName).Create(item).Error
 }
 
-// delete the authorization code
+// RemoveByCode uses the authoriation code to delete the token information,
+// actually set the code to "".
 func (t *TokenStore) RemoveByCode(ctx context.Context, code string) error {
 	return t.db.Table(t.tableName).Where("code = ?", code).Update("code", "").Error
 }
 
-// use the access token to delete the token information
+// RemoveByAccess uses the access token to delete the token information,
+// actually set the access token to "".
 func (t *TokenStore) RemoveByAccess(ctx context.Context, access string) error {
 	return t.db.Table(t.tableName).Where("access = ?", access).Update("access", "").Error
 }
 
-// use the refresh token to delete the token information
+// RemoveByRefresh uses the refresh token to delete the token information,
+// actually set the refresh token to "".
 func (t *TokenStore) RemoveByRefresh(ctx context.Context, refresh string) error {
 	return t.db.Table(t.tableName).Where("refresh = ?", refresh).Update("refresh", "").Error
 }
 
-// use the authorization code for token information data
+// GetByCode uses the authorization code to get the token information.
 func (t *TokenStore) GetByCode(ctx context.Context, code string) (oauth2.TokenInfo, error) {
 	if code == "" {
 		return nil, nil
@@ -172,7 +178,7 @@ func (t *TokenStore) GetByCode(ctx context.Context, code string) (oauth2.TokenIn
 	return t.parseTokenData(item.Data)
 }
 
-// use the access token for token information data
+// GetByAccess uses the access token to get the token information.
 func (t *TokenStore) GetByAccess(ctx context.Context, access string) (oauth2.TokenInfo, error) {
 	if access == "" {
 		return nil, nil
@@ -190,7 +196,7 @@ func (t *TokenStore) GetByAccess(ctx context.Context, access string) (oauth2.Tok
 	return t.parseTokenData(item.Data)
 }
 
-// use the refresh token for token information data
+// GetByRefresh uses the refresh token to get the token information.
 func (t *TokenStore) GetByRefresh(ctx context.Context, refresh string) (oauth2.TokenInfo, error) {
 	if refresh == "" {
 		return nil, nil
@@ -208,7 +214,7 @@ func (t *TokenStore) GetByRefresh(ctx context.Context, refresh string) (oauth2.T
 	return t.parseTokenData(item.Data)
 }
 
-// parseTokenData parse token data from json string to oauth2.TokenInfo.
+// parseTokenData parses a json string to the token inforamtion.
 func (t *TokenStore) parseTokenData(data string) (oauth2.TokenInfo, error) {
 	var info models.Token
 	if err := json.Unmarshal([]byte(data), &info); err != nil {

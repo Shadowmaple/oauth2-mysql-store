@@ -27,10 +27,12 @@ type ClientModel struct {
 	CreatedAt time.Time `gorm:"column:created_at"`
 }
 
+// NewDefaultClientStore return a default client storage according to default config.
 func NewDefaultClientStore() *ClientStore {
 	return NewClientStore(DefaultClientConfig())
 }
 
+// NewClientStore return a new client storage.
 func NewClientStore(cfg *ClientConfig) *ClientStore {
 	uri := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8&parseTime=True&loc=Local",
 		cfg.UserName, cfg.Password, cfg.Addr, cfg.Database)
@@ -63,7 +65,7 @@ func (c *ClientStore) Close() {
 	c.db.Close()
 }
 
-// GetByID get client information by the ID.
+// GetByID gets client information by the ID.
 func (c *ClientStore) GetByID(ctx context.Context, id string) (oauth2.ClientInfo, error) {
 	if id == "" {
 		return nil, nil
@@ -81,7 +83,7 @@ func (c *ClientStore) GetByID(ctx context.Context, id string) (oauth2.ClientInfo
 	return c.parseClientData(item.Data)
 }
 
-// parseClientData parse token data from json string to oauth2.TokenInfo.
+// parseClientData parses token data from json string to oauth2.TokenInfo.
 func (c *ClientStore) parseClientData(data string) (oauth2.ClientInfo, error) {
 	var info models.Client
 	if err := json.Unmarshal([]byte(data), &info); err != nil {
@@ -90,7 +92,7 @@ func (c *ClientStore) parseClientData(data string) (oauth2.ClientInfo, error) {
 	return &info, nil
 }
 
-// Create create a new storage record for client information.
+// Create creates a new storage record for client information.
 func (c *ClientStore) Create(info oauth2.ClientInfo) error {
 	clientID := info.GetID()
 	Secret := info.GetSecret()
@@ -118,7 +120,7 @@ func (c *ClientStore) Create(info oauth2.ClientInfo) error {
 	return c.db.Table(c.tableName).Create(client).Error
 }
 
-// GetByDomain get client information by the domain.
+// GetByDomain gets client information by the domain.
 func (c *ClientStore) GetByDomain(domain string) (oauth2.ClientInfo, error) {
 	if domain == "" {
 		return nil, nil
@@ -136,12 +138,14 @@ func (c *ClientStore) GetByDomain(domain string) (oauth2.ClientInfo, error) {
 	return c.parseClientData(item.Data)
 }
 
+// checkExistence checks whether the client id has been created.
 func (c *ClientStore) checkExistence(id string) bool {
 	var count uint32
 	c.db.Table(c.tableName).Where("id = ?", id).Count(&count)
 	return count != 0
 }
 
+// parseDomain parses out domain for url.
 func (c *ClientStore) parseDomain(url string) string {
 	a := strings.Split(url, "//")
 	if len(a) == 1 {
